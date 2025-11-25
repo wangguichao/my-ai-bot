@@ -43,7 +43,12 @@ const AgentInterface = () => {
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: [...messages, userMsg].map(m => ({ role: m.role, content: m.content })) }),
+        body: JSON.stringify({ 
+          messages: [...messages, userMsg].map(m => ({ 
+            role: m.role === 'ai' ? 'assistant' : m.role,  // <--- 关键修改在这里！
+            content: m.content 
+          })) 
+        }),
       });
 
       if (!response.ok) throw new Error(response.statusText);
