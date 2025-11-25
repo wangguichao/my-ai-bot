@@ -16,7 +16,7 @@ export async function POST(req) {
 
   // 向 AI 发送请求
   const response = await openai.chat.completions.create({
-    model: 'gpt-3.5-turbo', // 或者 'gpt-4o', 'deepseek-chat'
+    model: 'deepseek-chat', // 或者 'gpt-4o', 'deepseek-chat'
     stream: true,
     messages: [
         { role: "system", content: "你是一个专业的数据分析助手，语气专业且有帮助。" },
