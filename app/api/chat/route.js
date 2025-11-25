@@ -1,30 +1,55 @@
-// app/api/chat/route.js
-import { OpenAI } from 'openai';
-import { OpenAIStream, StreamingTextResponse } from 'ai';
+import OpenAI from 'openai';
 
-// 这里配置你的大模型服务商
-// 如果你用的是国内的 DeepSeek / Moonshot / 阿里通义，需要改 baseURL
+// 强制使用 Edge 运行时，速度更快
+export const runtime = 'edge';
+
+// 初始化 OpenAI 客户端 (适配 DeepSeek)
 const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY, 
-  baseURL: process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1', 
+  apiKey: process.env.OPENAI_API_KEY,
+  baseURL: process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1',
 });
 
-export const runtime = 'edge'; // 让速度更快
-
 export async function POST(req) {
-  const { messages } = await req.json();
+  try {
+    // 1. 获取前端发来的消息
+    const { messages } = await req.json();
 
-  // 向 AI 发送请求
-  const response = await openai.chat.completions.create({
-    model: 'deepseek-chat', // 或者 'gpt-4o', 'deepseek-chat'
-    stream: true,
-    messages: [
-        { role: "system", content: "你是一个专业的数据分析助手，语气专业且有帮助。" },
+    // 2. 向 DeepSeek 发送请求
+    const response = await openai.chat.completions.create({
+      model: 'deepseek-chat', // 确保模型名称正确
+      stream: true,           // 开启流式输出
+      messages: [
+        { role: "system", content: "你是一个专业、有用的智能助手。" },
         ...messages
-    ],
-  });
+      ],
+    });
 
-  // 把 AI 的回答变成流（打字机效果）传回给前端
-  const stream = OpenAIStream(response);
-  return new StreamingTextResponse(stream);
+    // 3. 将结果转换为流 (Stream) 返回给前端
+    // 这里我们手动处理流，不再依赖可能会报错的外部库
+    const stream = new ReadableStream({
+      async start(controller) {
+        const encoder = new TextEncoder();
+        try {
+          for await (const chunk of response) {
+            const content = chunk.choices[0]?.delta?.content || '';
+            if (content) {
+              controller.enqueue(encoder.encode(content));
+            }
+          }
+        } catch (err) {
+          controller.error(err);
+        } finally {
+          controller.close();
+        }
+      },
+    });
+
+    return new Response(stream, {
+      headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+    });
+
+  } catch (error) {
+    console.error('API Error:', error);
+    return new Response(JSON.stringify({ error: error.message }), { status: 500 });
+  }
 }
