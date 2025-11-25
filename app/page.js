@@ -1,28 +1,26 @@
 'use client';
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, Plus, MessageSquare, Settings, Bot, Sparkles, User, Paperclip, Mic, Trash2 } from 'lucide-react';
+import { Send, Plus, MessageSquare, Settings, Bot, Sparkles, User, Paperclip, Mic, Trash2, Edit2 } from 'lucide-react';
 
 // 生成唯一ID的小工具
 const generateId = () => Math.random().toString(36).substr(2, 9);
 
 const AgentInterface = () => {
-  // --- 状态管理 ---
-  const [sessions, setSessions] = useState([]); // 所有会话
-  const [currentSessionId, setCurrentSessionId] = useState(null); // 当前选中会话ID
-  const [messages, setMessages] = useState([]); // 当前显示的消息
+  const [sessions, setSessions] = useState([]); 
+  const [currentSessionId, setCurrentSessionId] = useState(null); 
+  const [messages, setMessages] = useState([]); 
   const [inputValue, setInputValue] = useState('');
   const [isTyping, setIsTyping] = useState(false);
   const messagesEndRef = useRef(null);
 
-  // --- 1. 初始化：从浏览器缓存读取历史 ---
+  // --- 1. 初始化 ---
   useEffect(() => {
     const savedSessions = localStorage.getItem('chat_sessions');
     if (savedSessions) {
       const parsedSessions = JSON.parse(savedSessions);
       setSessions(parsedSessions);
       if (parsedSessions.length > 0) {
-        // 如果有历史，默认选中第一个
         setCurrentSessionId(parsedSessions[0].id);
         setMessages(parsedSessions[0].messages);
       } else {
@@ -38,7 +36,7 @@ const AgentInterface = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isTyping]);
 
-  // --- 2. 辅助函数：保存到本地 ---
+  // --- 2. 保存到本地 ---
   const saveSessionsToLocal = (updatedSessions) => {
     setSessions(updatedSessions);
     localStorage.setItem('chat_sessions', JSON.stringify(updatedSessions));
@@ -49,11 +47,11 @@ const AgentInterface = () => {
     const newId = generateId();
     const newSession = {
       id: newId,
-      title: "新对话",
+      title: "新对话", // 初始标题
       date: new Date().toLocaleDateString(),
       messages: [{ 
         id: generateId(), 
-        role: 'ai', // 前端显示用 'ai' 没问题，发请求时再转
+        role: 'ai', 
         content: '你好！我是你的全能 AI 助手。请问今天想做什么？' 
       }]
     };
@@ -87,9 +85,60 @@ const AgentInterface = () => {
     }
   };
 
-  // --- 6. 发送消息 (整合了你的修复 + 历史记录保存) ---
+  // --- ★★★ 新增功能：智能生成标题 ★★★ ---
+  const generateSmartTitle = async (userMessage, sessionId) => {
+    try {
+      // 我们请求 AI 把用户的话总结成一个标题
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          messages: [
+            { role: "system", content: "你是一个标题生成器。请将用户的输入总结为一个简短的标题（5-10个字以内），不要包含标点符号，直接返回标题文字即可。" },
+            { role: "user", content: userMessage }
+          ]
+        }),
+      });
+
+      if (!response.ok) return;
+
+      // 读取流来获取完整的标题
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let title = '';
+      
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        title += decoder.decode(value, { stream: true });
+      }
+
+      // 标题太长就截断一下，防止破坏UI
+      title = title.replace(/["《》]/g, '').trim(); // 去掉可能的引号
+      if (title.length > 15) title = title.slice(0, 15) + "...";
+
+      // 更新 Session 列表里的标题
+      setSessions(prevSessions => {
+        const updated = prevSessions.map(s => 
+          s.id === sessionId ? { ...s, title: title } : s
+        );
+        // 别忘了同步保存到 LocalStorage
+        localStorage.setItem('chat_sessions', JSON.stringify(updated));
+        return updated;
+      });
+
+    } catch (error) {
+      console.error("生成标题失败", error);
+    }
+  };
+
+  // --- 6. 发送消息 ---
   const handleSendMessage = async () => {
     if (!inputValue.trim()) return;
+
+    // 记录当前的 Session ID，因为异步操作中 currentSessionId 可能会变
+    const activeSessionId = currentSessionId;
+    const currentInput = inputValue;
 
     // A. 界面立即显示用户消息
     const userMsg = { id: generateId(), role: 'user', content: inputValue };
@@ -99,23 +148,28 @@ const AgentInterface = () => {
     setInputValue('');
     setIsTyping(true);
 
-    // B. 更新历史记录标题 (如果是第一句)
+    // B. 保存用户消息到历史
     let updatedSessions = sessions.map(session => {
-      if (session.id === currentSessionId) {
-        const newTitle = session.messages.length <= 1 ? userMsg.content.slice(0, 10) + "..." : session.title;
-        return { ...session, messages: newMessages, title: newTitle };
+      if (session.id === activeSessionId) {
+        return { ...session, messages: newMessages };
       }
       return session;
     });
     saveSessionsToLocal(updatedSessions);
 
+    // ★★★ 判断是否需要生成标题：如果是该对话的第2条消息（第1条是AI欢迎语） ★★★
+    const isFirstUserMessage = messages.length === 1; 
+    if (isFirstUserMessage) {
+       // 这是一个后台操作，不需要 await，让它在后台跑，不影响聊天
+       generateSmartTitle(currentInput, activeSessionId);
+    }
+
     try {
-      // C. 发送请求 (应用了你的修复: role 转换)
+      // C. 发送请求给 AI
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
-          // ★★★ 这里是你刚才修复的关键代码 ★★★
           messages: newMessages.map(m => ({ 
             role: m.role === 'ai' ? 'assistant' : m.role, 
             content: m.content 
@@ -129,9 +183,8 @@ const AgentInterface = () => {
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let aiContent = '';
-      
-      // 创建一个空的 AI 消息占位
       const aiMsgId = generateId();
+      
       setMessages(prev => [...prev, { id: aiMsgId, role: 'ai', content: '' }]);
 
       while (true) {
@@ -140,10 +193,8 @@ const AgentInterface = () => {
         const text = decoder.decode(value, { stream: true });
         aiContent += text;
         
-        // 实时更新 UI 上的最后一条消息
         setMessages(prev => {
            const newMsgs = [...prev];
-           // 确保我们在更新刚才添加的那条 AI 消息
            const lastMsg = newMsgs[newMsgs.length - 1];
            if (lastMsg.role === 'ai') {
              lastMsg.content = aiContent;
@@ -152,22 +203,28 @@ const AgentInterface = () => {
         });
       }
 
-      // E. 对话结束，把完整的 AI 回复存入 LocalStorage
-      updatedSessions = sessions.map(session => {
-        if (session.id === currentSessionId) {
-          return { 
-            ...session, 
-            messages: [...session.messages, { id: aiMsgId, role: 'ai', content: aiContent }] 
-          };
-        }
-        return session;
+      // E. 对话结束，保存 AI 回复
+      updatedSessions = sessions.map(session => { // 注意：这里要用最新的 sessions 状态，但由于闭包问题，我们最好重新从 localStorage 读或者用函数式更新，这里简化处理，直接再次 map
+         // 为了防止标题更新冲突，我们这里稍微取巧一点，直接在 setSessions 里做最终更新会更安全，但为了代码易读性，我们假设标题生成很快或者用户不会操作那么快
+         return session.id === activeSessionId 
+            ? { ...session, messages: [...session.messages, { id: aiMsgId, role: 'ai', content: aiContent }] }
+            : session;
       });
-      saveSessionsToLocal(updatedSessions);
+      // 这里的 save 可能会覆盖掉刚才后台生成的标题，所以我们需要更谨慎的更新策略
+      // 为了解决并发更新问题，我们使用 setSessions 的回调函数来确保数据一致性
+      setSessions(prev => {
+          const finalUpdate = prev.map(s => 
+            s.id === activeSessionId 
+            ? { ...s, messages: [...s.messages, { id: aiMsgId, role: 'ai', content: aiContent }] } 
+            : s
+          );
+          localStorage.setItem('chat_sessions', JSON.stringify(finalUpdate));
+          return finalUpdate;
+      });
 
     } catch (error) {
       console.error("Error:", error);
-      const errorMsg = { id: generateId(), role: 'ai', content: '出错了，请检查网络连接或 API Key。' };
-      setMessages(prev => [...prev, errorMsg]);
+      setMessages(prev => [...prev, { id: generateId(), role: 'ai', content: '出错了，请重试。' }]);
     } finally {
       setIsTyping(false);
     }
@@ -206,7 +263,7 @@ const AgentInterface = () => {
                   currentSessionId === session.id ? 'bg-slate-800 text-white' : 'text-slate-400 hover:bg-slate-800 hover:text-white'
                 }`}
               >
-                <MessageSquare size={16} className={currentSessionId === session.id ? 'text-blue-400' : 'text-slate-500'} />
+                <MessageSquare size={16} className={`flex-shrink-0 ${currentSessionId === session.id ? 'text-blue-400' : 'text-slate-500'}`} />
                 <span className="text-sm truncate pr-6">{session.title}</span>
                 <button 
                   onClick={(e) => deleteSession(e, session.id)}
